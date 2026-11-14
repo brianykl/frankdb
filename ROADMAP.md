@@ -10,7 +10,9 @@ A storage-disaggregated key-value database in Rust, inspired by
 ## Current status
 
 - **Current milestone:** 1, Vocabulary, reference model, deterministic workloads
-- **Next action:** answer the Milestone 1 pre-work questions, then implement
+- **Done:** workspace set up (`db`, `wal`, `replay`, `server`, `storage`); `wal` has a binary; build and tests pass; Rust Book ch. 4 read and quizzed
+- **Next action:** read Rust Book ch. 5–8, answer the Milestone 1 pre-work questions, then implement
+- **Known gaps to revisit:** why the borrow rules prevent dangling pointers (Vec reallocation); moves don't deep-copy; `&str`/`&[u8]` for read-only parameters
 
 Update this section whenever a checkpoint passes.
 
@@ -109,6 +111,25 @@ Before adding disk or network code, define the operations precisely and build a 
 
 ### Deferred
 Disk, durability, networking, async, concurrency, timeouts, scans, transactions.
+
+### Milestone 1 is split into small assignments
+
+| Step | Scope | Rust Book prerequisite | Status |
+|---|---|---|---|
+| 1a | Sequence-number type in `db` | ch. 5 | **active** |
+| 1b | Operation type (put/get/delete) | ch. 6 | — |
+| 1c | Reference model | ch. 8 | — |
+| 1d | Seeded deterministic workload generator | ch. 5–8 | — |
+
+#### 1a: The sequence-number type
+
+- **Problem:** every change gets a position in the log, and every later component (WAL, replay, storage, freshness reads) passes these positions around. A dedicated type lets the compiler catch mix-ups, such as passing a key count or a byte length where a sequence number belongs.
+- **Reading:** Rust Book ch. 5.1 (tuple structs), 5.2 (`#[derive(Debug)]`), 5.3 (methods, associated functions).
+- **Required behavior:** a type in `db` that represents a sequence number. It can be created from a `u64`, the `u64` can be read back, it can produce the next sequence number, two of them can be compared for equal / less than, and it can be printed with `{:?}`. Remove the placeholder `add` function.
+- **Invariants:** next(n) > n. A plain `u64` can't be passed where a sequence number is expected.
+- **Decisions to make and explain:** tuple struct vs named field; public or private inner value; what 0 means; what happens when next() is called at `u64::MAX`; whether it should be `Copy`; which traits to derive.
+- **Acceptance:** tests in `db` cover next, ordering, round-tripping the `u64`, and Debug output. Manually confirm that passing a raw `u64` where the type is required fails to compile. `cargo build`, `cargo test`, and `cargo clippy` are clean.
+- **Deferred:** encoding to bytes, the WAL assigning numbers, concurrency.
 
 ### Pre-work questions
 1. Why does the paper's tail latency come from per-page log chain length rather than total log volume?
