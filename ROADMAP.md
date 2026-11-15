@@ -11,7 +11,7 @@ A storage-disaggregated key-value database in Rust, inspired by
 
 - **Current milestone:** 1, Vocabulary, reference model, deterministic workloads
 - **Done:** workspace set up (`db`, `wal`, `replay`, `server`, `storage`); `wal` has a binary; build and tests pass; Rust Book ch. 4 read and quizzed
-- **Next action:** read Rust Book ch. 5–8, answer the Milestone 1 pre-work questions, then implement
+- **Next action:** read Rust Book ch. 6, then do 1b (interface types); read ch. 7–8 before 1c. Answer the Milestone 1 pre-work questions, then implement
 - **Known gaps to revisit:** why the borrow rules prevent dangling pointers (Vec reallocation); moves don't deep-copy; `&str`/`&[u8]` for read-only parameters
 
 Update this section whenever a checkpoint passes.
@@ -53,6 +53,97 @@ Each milestone ends with a checkpoint: a test or demo that must pass before movi
 | 10 | Demo app: event-offer tracker | CLI or HTTP | end-to-end use | Live demo: write prices, read with a freshness floor, kill replay, watch catch-up |
 
 **Later:** a page-based storage engine (B-tree vs LSM, chosen after studying both), scans and secondary indexes, YCSB-style workloads, and a small PostgreSQL wire-protocol subset.
+
+---
+
+## Application layer: the frankdb ORM
+
+Modeled on the py-mkt `BaseDataLayer` pattern (create / get / list / count / update / delete). Everything is in Rust.
+
+### Decisions so far
+
+- **One domain type = one table.** Tables are key prefixes in frankdb: an `Offer` with id `abc` is stored at key `offer/abc`, with the serialized record as the value.
+- **One data layer per domain type,** built on a shared base data layer. The ORM talks to frankdb through a Rust trait in `db`. Its first implementation is the in-memory reference model; the second is the network client.
+- **Partial updates happen on the server, like Postgres.** `update(id, changes, user)` sends only the changed fields. The server writes a **patch** log record ("set price = 50 on offer/abc"), and replay applies patches in log order. No lost updates and no client-side read-modify-write. This means:
+  - Records are not opaque bytes. They have named fields (start schemaless: a map of field name → typed value; add schemas later).
+  - The log holds full records (puts), patches, and deletes. Reading a key may require applying a chain of patches, which is the same per-page log chain the RaaS paper studies (§2.4, §3).
+
+### ORM ↔ server interface, in stages
+
+| Stage | Server operations | Enables ORM methods | Lands after |
+|---|---|---|---|
+| A | `get(key, min_seq?)`, `put(key, value)`, `delete(key)`; writes return the sequence number | `get`, `delete`, unconditional writes | Milestone 1c (in memory), Milestone 6 (real system) |
+| A+ | `patch(key, field changes)`: server-side partial update, replay applies patches in order | `update` | after Milestone 6, or earlier in the reference model |
+| B | Conditional writes: only if absent / only if exists / only if version = X; returns `Conflict` | safe `create` (no duplicates), "not found" errors on `update` | new milestone after 6 |
+| C | `scan(start, end, limit, min_seq?)`, `count(start, end)` over ordered keys | `list`, `count` | needs ordered storage (affects the Milestone 3 choice) |
+| Later | filters, secondary indexes (`ORDER BY created_at`), multi-key transactions (py-mkt's `uow`) | full `list` filters, units of work | deferred |
+
+**Open problem for Stage B:** conditions must be checked against the latest state, but storage lags the log. Options: wait for replay, have the log service check the condition, or have the server track recent writes. This connects directly to the paper's freshness problem.
+
+**Possible extra:** a Postgres implementation of the same base data layer, so one application can be benchmarked on frankdb vs Postgres.
+
+### Interface spec v0 (draft, to be finalized by Brian)
+
+**One entry point:** `execute(request) → response or error`. The contract is the request/response *data*, not Rust-specific features, so a Python client can speak it later once there's a wire format (Milestone 5; JSON, protobuf, or custom binary to be decided then). Requests are structured commands, not a text query language. SQL is deferred. Closest real-world analog: DynamoDB's API (PutItem / GetItem / UpdateItem / DeleteItem / Query, with conditions).
+
+**Data model**
+
+| Concept | Meaning |
+|---|---|
+| Table | a name, e.g. `offer`, plus a **schema** |
+| Schema | an ordered list of columns; each has a name, a column type, and whether it may be null. Stored by the server in a catalog. |
+| Column type | integer, float, text, boolean (more later) |
+| Primary key | **declared by each table's schema and required**: exactly one column, not nullable, Integer or Text. Requests address a row by its key value. (Composite keys later.) |
+| Value | one of: integer, float, text, boolean, null (more types later) |
+| Record (API) | a map of column name → Value; what the ORM sends and receives |
+| Row (internal) | values in schema column order, no names; what the log and storage hold |
+| Seq | the `LogSequenceNumber` type from 1a |
+
+**Requests**
+
+| Request | Inputs | Success response | Errors |
+|---|---|---|---|
+| CreateTable | table, schema | seq of the write | TableExists, invalid schema |
+| Insert | table, record (the key comes from the record's primary-key column) | seq of the write | AlreadyExists, schema errors |
+| Get | table, key value, optional min_seq | record or nothing, and the seq it was read at | FreshnessTimeout |
+| Patch | table, key value, field changes (set field = value, remove field) | seq of the write | NotFound |
+| Delete | table, key value | seq of the write | NotFound? (decide) |
+| Scan | table, limit, optional start-after key, optional min_seq | records in key order, plus a cursor for the next page | FreshnessTimeout |
+| Count | table, optional min_seq | number of records | FreshnessTimeout |
+
+Schema errors (Insert, Patch): unknown table, unknown column, wrong type, null in a non-nullable column, missing required column.
+
+General errors on any request: invalid request, unavailable, internal.
+
+**Schema decisions:** schemas are enforced by the server (validated on Insert/Patch, converted from named Record to positional Row). Catalog changes go through the log like any other write, so they survive crashes. Deferred: ALTER TABLE / schema evolution. When it comes, columns will need stable ids so dropped columns don't shift positions.
+
+**Decisions to make**
+
+1. ~~Get on a missing id~~ **Decided:** success with nothing (like py-mkt's `None`).
+2. Delete on a missing id: error, or success that reports nothing was deleted? (py-mkt returns the deleted entity or `None`.)
+3. **Decided:** the ORM sets `created_at`, `updated_at`, `updated_by`. Still open: who generates ids?
+4. Paging: offset (like py-mkt) or start-after cursor? Offset re-reads skipped rows and shifts when rows are inserted.
+5. Ordering: py-mkt lists newest first by `created_at`. Without secondary indexes, the server can only order by id. If ids are time-ordered (ULID / UUIDv7), id order is creation order.
+6. Batch create (py-mkt accepts a list): a separate request, or defer?
+
+**Deferred:** filters on Scan/Count, secondary indexes, text search, transactions (`uow`), row locks (`lock_row`).
+
+**Note on Insert/Patch errors in the real system:** in the in-memory reference model, AlreadyExists and NotFound are trivial to check. In the disaggregated system, the server acknowledges after logging and storage may lag, so these checks hit the Stage B open problem.
+
+### ORM side (Rust, in its own crate)
+
+| Piece | Responsibility |
+|---|---|
+| Entity trait | implemented by each domain type: its table name, its id, conversion to/from a Record |
+| Base data layer | generic over an entity type and a client; provides create, get, list, count, update, delete by building requests and calling `execute` |
+| Per-domain data layer | e.g. offer data layer: uses the base, adds domain-specific methods |
+| Client | anything implementing `execute`: first the in-memory reference model, later the network client |
+
+Updates are data (a list of field changes), not Rust closures, because they must cross the network to the server.
+
+### Revised Milestone 1 order
+
+1a sequence number (done) → 1b Value, Record, Request, Response, error types (Book ch. 6) → 1c in-memory `execute` = the reference model (ch. 8) → 1d ORM v0 against the in-memory model → 1e seeded workload generator.
 
 ---
 
@@ -116,10 +207,11 @@ Disk, durability, networking, async, concurrency, timeouts, scans, transactions.
 
 | Step | Scope | Rust Book prerequisite | Status |
 |---|---|---|---|
-| 1a | Sequence-number type in `db` | ch. 5 | **active** |
-| 1b | Operation type (put/get/delete) | ch. 6 | — |
-| 1c | Reference model | ch. 8 | — |
-| 1d | Seeded deterministic workload generator | ch. 5–8 | — |
+| 1a | Sequence-number type in `db` | ch. 5 | done |
+| 1b | Value, Record, Request, Response, error types (see "Interface spec v0") | ch. 6 | **next** |
+| 1c | In-memory `execute`: the reference model | ch. 8 | — |
+| 1d | ORM v0 against the in-memory model | ch. 10 | — |
+| 1e | Seeded deterministic workload generator | ch. 5–8 | — |
 
 #### 1a: The sequence-number type
 

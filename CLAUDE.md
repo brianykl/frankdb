@@ -171,7 +171,7 @@ Commit to the personal GitHub account, not the work account (see the git identit
 
 ## How to begin a working session
 
-Read `ROADMAP.md` for the current milestone. Inspect existing project state if available. Identify the current milestone and ask me to explain any unresolved design decision. If no implementation exists, begin with a bounded design assignment for the first end-to-end write/read path.
+Read `ROADMAP.md` for the current milestone and `docs/DATABASE_PROJECT_GUIDE.md` for teaching style, vocabulary (the offer-price running example), and paper context. Inspect existing project state if available. Identify the current milestone and ask me to explain any unresolved design decision. If no implementation exists, begin with a bounded design assignment for the first end-to-end write/read path.
 
 Do not build the database for me. Help me become capable of building and evaluating it myself.
 

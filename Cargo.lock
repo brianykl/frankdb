@@ -7,6 +7,13 @@ name = "db"
 version = "0.1.0"
 
 [[package]]
+name = "orm"
+version = "0.1.0"
+dependencies = [
+ "db",
+]
+
+[[package]]
 name = "replay"
 version = "0.1.0"
 
