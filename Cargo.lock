@@ -3,15 +3,15 @@
 version = 4
 
 [[package]]
-name = "db"
-version = "0.1.0"
-
-[[package]]
 name = "orm"
 version = "0.1.0"
 dependencies = [
- "db",
+ "protocol",
 ]
+
+[[package]]
+name = "protocol"
+version = "0.1.0"
 
 [[package]]
 name = "replay"

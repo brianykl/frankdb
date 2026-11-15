@@ -10,7 +10,7 @@ A storage-disaggregated key-value database in Rust, inspired by
 ## Current status
 
 - **Current milestone:** 1, Vocabulary, reference model, deterministic workloads
-- **Done:** workspace set up (`db`, `wal`, `replay`, `server`, `storage`); `wal` has a binary; build and tests pass; Rust Book ch. 4 read and quizzed
+- **Done:** workspace set up (`protocol`, `wal`, `replay`, `server`, `storage`, `orm`); `wal` has a binary; build and tests pass; Rust Book ch. 4 read and quizzed
 - **Next action:** read Rust Book ch. 6, then do 1b (interface types); read ch. 7–8 before 1c. Answer the Milestone 1 pre-work questions, then implement
 - **Known gaps to revisit:** why the borrow rules prevent dangling pointers (Vec reallocation); moves don't deep-copy; `&str`/`&[u8]` for read-only parameters
 
@@ -63,7 +63,7 @@ Modeled on the py-mkt `BaseDataLayer` pattern (create / get / list / count / upd
 ### Decisions so far
 
 - **One domain type = one table.** Tables are key prefixes in frankdb: an `Offer` with id `abc` is stored at key `offer/abc`, with the serialized record as the value.
-- **One data layer per domain type,** built on a shared base data layer. The ORM talks to frankdb through a Rust trait in `db`. Its first implementation is the in-memory reference model; the second is the network client.
+- **One data layer per domain type,** built on a shared base data layer. The ORM talks to frankdb through a Rust trait in `protocol` (the shared messages and types; formerly `db`). Its first implementation is the in-memory reference model; the second is the network client.
 - **Partial updates happen on the server, like Postgres.** `update(id, changes, user)` sends only the changed fields. The server writes a **patch** log record ("set price = 50 on offer/abc"), and replay applies patches in log order. No lost updates and no client-side read-modify-write. This means:
   - Records are not opaque bytes. They have named fields (start schemaless: a map of field name → typed value; add schemas later).
   - The log holds full records (puts), patches, and deletes. Reading a key may require applying a chain of patches, which is the same per-page log chain the RaaS paper studies (§2.4, §3).
@@ -207,7 +207,7 @@ Disk, durability, networking, async, concurrency, timeouts, scans, transactions.
 
 | Step | Scope | Rust Book prerequisite | Status |
 |---|---|---|---|
-| 1a | Sequence-number type in `db` | ch. 5 | done |
+| 1a | Sequence-number type in `protocol` | ch. 5 | done |
 | 1b | Value, Record, Request, Response, error types (see "Interface spec v0") | ch. 6 | **next** |
 | 1c | In-memory `execute`: the reference model | ch. 8 | — |
 | 1d | ORM v0 against the in-memory model | ch. 10 | — |
@@ -217,10 +217,10 @@ Disk, durability, networking, async, concurrency, timeouts, scans, transactions.
 
 - **Problem:** every change gets a position in the log, and every later component (WAL, replay, storage, freshness reads) passes these positions around. A dedicated type lets the compiler catch mix-ups, such as passing a key count or a byte length where a sequence number belongs.
 - **Reading:** Rust Book ch. 5.1 (tuple structs), 5.2 (`#[derive(Debug)]`), 5.3 (methods, associated functions).
-- **Required behavior:** a type in `db` that represents a sequence number. It can be created from a `u64`, the `u64` can be read back, it can produce the next sequence number, two of them can be compared for equal / less than, and it can be printed with `{:?}`. Remove the placeholder `add` function.
+- **Required behavior:** a type in `protocol` that represents a sequence number. It can be created from a `u64`, the `u64` can be read back, it can produce the next sequence number, two of them can be compared for equal / less than, and it can be printed with `{:?}`. Remove the placeholder `add` function.
 - **Invariants:** next(n) > n. A plain `u64` can't be passed where a sequence number is expected.
 - **Decisions to make and explain:** tuple struct vs named field; public or private inner value; what 0 means; what happens when next() is called at `u64::MAX`; whether it should be `Copy`; which traits to derive.
-- **Acceptance:** tests in `db` cover next, ordering, round-tripping the `u64`, and Debug output. Manually confirm that passing a raw `u64` where the type is required fails to compile. `cargo build`, `cargo test`, and `cargo clippy` are clean.
+- **Acceptance:** tests in `protocol` cover next, ordering, round-tripping the `u64`, and Debug output. Manually confirm that passing a raw `u64` where the type is required fails to compile. `cargo build`, `cargo test`, and `cargo clippy` are clean.
 - **Deferred:** encoding to bytes, the WAL assigning numbers, concurrency.
 
 ### Pre-work questions
