@@ -9,10 +9,23 @@ A storage-disaggregated key-value database in Rust, inspired by
 
 ## Current status
 
-- **Current milestone:** 1, Vocabulary, reference model, deterministic workloads
-- **Done:** workspace set up (`protocol`, `wal`, `replay`, `server`, `storage`, `orm`); `wal` has a binary; build and tests pass; Rust Book ch. 4 read and quizzed
-- **Next action:** read Rust Book ch. 6, then do 1b (interface types); read ch. 7–8 before 1c. Answer the Milestone 1 pre-work questions, then implement
+- **Current milestone:** 1, Vocabulary types + server interface
+- **Done:**
+  - workspace: `protocol` (renamed from `db`), `wal`, `replay`, `server`, `storage`, `orm`
+  - `protocol`: `LogSequenceNumber`, `Value`, `ColumnType`, `Record`, `Column`, `Schema` (validated: required primary key, not nullable, not float, no duplicate columns), `SchemaError`, `Request` (CreateTable, Insert, Get); 13 tests passing
+  - `server`: signatures only (`main`, `listener::run`, `connection::handle`, `Engine`), bodies are `todo!()`; deps tokio, tracing, tracing-subscriber
+  - Rust Book ch. 4–5 read; ch. 4 quizzed
+- **Next actions, in order:**
+  1. `Request::Get`: make the freshness field `Option<LogSequenceNumber>`; consider a `Key` enum (Integer, Text) instead of `Value` for keys
+  2. `Response` in `protocol/src/response.rs`: one write variant (`Written`, the seq) and one variant per read shape (`Row`: optional record + seq)
+  3. `DbError` in `protocol/src/error.rs`: grouped by what the caller should do (wrong request / temporarily unavailable / outcome unknown); `#[non_exhaustive]`
+  4. `Executor` trait in `protocol/src/executor.rs`: async (`impl Future<...> + Send`), `&self`, `Send + Sync`
+  5. `protocol/src/wire.rs`: Request/Response <-> bytes, length-prefixed frames, payload format to decide (JSON via serde vs binary)
+  6. fill in `server`: `Engine` implements `Executor`; `connection::handle` does read frame -> decode Request -> execute -> encode Response -> write
+- **Request path (who touches bytes):** client encodes a Request with `wire` and sends it. The server's **listener** only accepts connections and hands each one to a **connection handler**. The handler decodes bytes into a `Request` (via `wire`), calls `engine.execute`, encodes the `Response` (via `wire`), and writes it back. `wire` lives in `protocol` because client and server must encode identically.
+- **Reading before step 4–6:** Rust Book ch. 6.2 (`match`), ch. 10 (traits), ch. 16 (`Arc`), ch. 17 (async); the tokio tutorial (mini-redis)
 - **Known gaps to revisit:** why the borrow rules prevent dangling pointers (Vec reallocation); moves don't deep-copy; `&str`/`&[u8]` for read-only parameters
+- **Open lint:** clippy suggests `Default` for `Record`
 
 Update this section whenever a checkpoint passes.
 
@@ -236,8 +249,8 @@ Disk, durability, networking, async, concurrency, timeouts, scans, transactions.
 | Step | Scope | Rust Book prerequisite | Status |
 |---|---|---|---|
 | 1a | Sequence-number type in `protocol` | ch. 5 | done |
-| 1b | Value, Record, Request, Response, error types (see "Interface spec v0") | ch. 6 | **next** |
-| 1c | In-memory `execute`: the reference model | ch. 8 | — |
+| 1b | Value, Record, Schema, Request, Response, error types, Executor trait (see "Interface spec v0") | ch. 6, 10 | **in progress** |
+| 1c | In-memory `execute`: the reference model | ch. 8 | deferred (building the real server path first; still needed later as the test oracle) |
 | 1d | ORM v0 against the in-memory model | ch. 10 | — |
 | 1e | Seeded deterministic workload generator | ch. 5–8 | — |
 
