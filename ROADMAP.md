@@ -86,6 +86,13 @@ Modeled on the py-mkt `BaseDataLayer` pattern (create / get / list / count / upd
 
 **One entry point:** `execute(request) → response or error`. The contract is the request/response *data*, not Rust-specific features, so a Python client can speak it later once there's a wire format (Milestone 5; JSON, protobuf, or custom binary to be decided then). Requests are structured commands, not a text query language. SQL is deferred. Closest real-world analog: DynamoDB's API (PutItem / GetItem / UpdateItem / DeleteItem / Query, with conditions).
 
+**Executor trait decisions (built to last):**
+- **Async from day one.** The real server waits on network and disk. `execute` returns a `Future` that is `Send`, so it works on a multi-threaded runtime. The `protocol` crate stays runtime-agnostic: it uses `std` futures only, no tokio dependency.
+- **`&self`, not `&mut self`.** A real server handles many clients at once, so implementations synchronize internally. The trait requires `Send + Sync`.
+- **`#[non_exhaustive]` on `Request`, `Response`, `DbError`.** New variants can be added later without breaking other crates' `match`es.
+- **Errors are grouped by what the caller should do:** the request is wrong (don't retry: schema, not found, already exists); the system is temporarily unable (safe to retry: unavailable, freshness timeout); the **outcome is unknown** (a write may or may not have been logged, e.g. a timeout after sending). Unknown-outcome errors force the client to handle "maybe it happened", which is the client-timeout question from CLAUDE.md.
+- **Later, additive:** batch execution, request ids for safe retries, a protocol version handshake (Milestone 5).
+
 **Data model**
 
 | Concept | Meaning |
@@ -129,6 +136,27 @@ General errors on any request: invalid request, unavailable, internal.
 **Deferred:** filters on Scan/Count, secondary indexes, text search, transactions (`uow`), row locks (`lock_row`).
 
 **Note on Insert/Patch errors in the real system:** in the in-memory reference model, AlreadyExists and NotFound are trivial to check. In the disaggregated system, the server acknowledges after logging and storage may lag, so these checks hit the Stage B open problem.
+
+### Server process outline
+
+```
+protocol/src/          shared by server AND client
+├── request.rs, response.rs, error.rs, executor.rs
+└── wire.rs            Request/Response <-> bytes, and framing (length-prefixed messages)
+
+server/src/
+├── main.rs            read config (port), build the engine, start the listener
+├── lib.rs             declares the modules below
+├── listener.rs        step 1: bind a TCP port, accept connections, spawn one task per connection
+├── connection.rs      steps 2 and 4: read a frame, decode a Request, call execute, encode the Response, write it back
+└── engine.rs          step 3: the struct that implements Executor (catalog, then WAL + storage)
+```
+
+- `listener.rs` and `connection.rs` know sockets and bytes, not tables. `engine.rs` knows tables, not sockets. The `Executor` trait is the seam.
+- The wire format lives in `protocol` because the client needs the same encoding.
+- **Wire format v0 (to decide):** length-prefixed frames (a 4-byte length, then the payload). Payload: JSON via `serde` (easy to debug, Python-friendly) or a binary format (smaller, faster). Start with JSON, measure later.
+- **First checkpoint, the "walking skeleton":** the server binary listens on a port. A small client connects and sends a Get. The engine answers with a real `DbError` (e.g. table not found). The response comes back and is printed. Every layer exists, even though the engine does almost nothing.
+- **Reading:** Rust Book ch. 17 (async) and ch. 21 (multithreaded web server); the tokio tutorial (tokio.rs), whose mini-redis example has the same listener → connection → frame structure.
 
 ### ORM side (Rust, in its own crate)
 
