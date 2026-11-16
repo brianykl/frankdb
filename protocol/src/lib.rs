@@ -5,6 +5,7 @@ mod request;
 mod response;
 mod error;
 mod executor;
+mod wire;
 
 pub use lsn::LogSequenceNumber;
 
@@ -19,3 +20,6 @@ pub use response::Response;
 pub use error::DbError;
 pub use error::DbErrorStatus;
 pub use executor::Executor;
+pub use wire::WireError;
+pub use wire::encode_value;
+pub use wire::decode_value;

@@ -12,15 +12,14 @@ A storage-disaggregated key-value database in Rust, inspired by
 - **Current milestone:** 1, Vocabulary types + server interface
 - **Done:**
   - workspace: `protocol` (renamed from `db`), `wal`, `replay`, `server`, `storage`, `orm`
-  - `protocol`: `LogSequenceNumber`, `Value`, `ColumnType`, `Record`, `Column`, `Schema` (validated: required primary key, not nullable, not float, no duplicate columns), `SchemaError`, `Request` (CreateTable, Insert, Get with optional min seq), `Response` (`Written(seq)`, `Row { record: Option, seq }`, non_exhaustive), `DbError` (non_exhaustive; `db_error_status()` -> `DbErrorStatus` Rejected/Unavailable/OutcomeUnknown; wraps `SchemaError` as `InvalidSchema`); 13 tests passing (DbError bucket tests still to write)
+  - `protocol`: `LogSequenceNumber`, `Value`, `ColumnType`, `Record`, `Column`, `Schema` (validated: required primary key, not nullable, not float, no duplicate columns), `SchemaError`, `Request` (CreateTable, Insert, Get with optional min seq), `Response` (`Written(seq)`, `Row { record: Option, seq }`, non_exhaustive), `DbError` (non_exhaustive; `db_error_status()` -> `DbErrorStatus` Rejected/Unavailable/OutcomeUnknown; wraps `SchemaError` as `InvalidSchema`), `Executor` trait (`Send + Sync`, `execute(&self, Request) -> impl Future<Output = Result<Response, DbError>> + Send`); 13 tests passing (DbError bucket tests still to write)
   - `server`: signatures only (`main`, `listener::run`, `connection::handle`, `Engine`), bodies are `todo!()`; deps tokio, tracing, tracing-subscriber
   - Rust Book ch. 4–5 read; ch. 4 quizzed
 - **Next actions, in order:**
-  1. `Executor` trait in `protocol/src/executor.rs`: async (`impl Future<...> + Send`), `&self`, `Send + Sync`
-  2. `protocol/src/wire.rs`: Request/Response <-> bytes, length-prefixed frames, payload format to decide (JSON via serde vs binary)
-  3. fill in `server`: `Engine` implements `Executor`; `connection::handle` does read frame -> decode Request -> execute -> encode Response -> write
+  1. `protocol/src/wire.rs`: Request/Response <-> bytes, length-prefixed frames, **hand-rolled binary payload** (decided 2026-11-16: no serde, for learning; write the format spec down so a Python client can reimplement it). Order: `Value` encode/decode first, then Record, Schema, Request, Response, then framing
+  2. fill in `server`: `Engine` implements `Executor`; `connection::handle` does read frame -> decode Request -> execute -> encode Response -> write
 - **Request path (who touches bytes):** client encodes a Request with `wire` and sends it. The server's **listener** only accepts connections and hands each one to a **connection handler**. The handler decodes bytes into a `Request` (via `wire`), calls `engine.execute`, encodes the `Response` (via `wire`), and writes it back. `wire` lives in `protocol` because client and server must encode identically.
-- **Reading before steps 1–3:** Rust Book ch. 6.2 (`match`), ch. 10 (traits), ch. 16 (`Arc`), ch. 17 (async); the tokio tutorial (mini-redis)
+- **Reading before steps 1–2:** Rust Book ch. 6.2 (`match`), ch. 10 (traits), ch. 16 (`Arc`), ch. 17 (async); the tokio tutorial (mini-redis)
 - **Known gaps to revisit:** why the borrow rules prevent dangling pointers (Vec reallocation); moves don't deep-copy; `&str`/`&[u8]` for read-only parameters
 - **Open lint:** clippy suggests `Default` for `Record`
 - **Open design item:** `Request::Get` still takes `key: Value`; consider a `Key` enum (Integer, Text; derives Eq/Ord/Hash) since keys can't be Float/Null. Also decide how Insert extracts a `Key` from a `Record`
