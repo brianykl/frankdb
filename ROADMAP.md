@@ -12,20 +12,18 @@ A storage-disaggregated key-value database in Rust, inspired by
 - **Current milestone:** 1, Vocabulary types + server interface
 - **Done:**
   - workspace: `protocol` (renamed from `db`), `wal`, `replay`, `server`, `storage`, `orm`
-  - `protocol`: `LogSequenceNumber`, `Value`, `ColumnType`, `Record`, `Column`, `Schema` (validated: required primary key, not nullable, not float, no duplicate columns), `SchemaError`, `Request` (CreateTable, Insert, Get); 13 tests passing
+  - `protocol`: `LogSequenceNumber`, `Value`, `ColumnType`, `Record`, `Column`, `Schema` (validated: required primary key, not nullable, not float, no duplicate columns), `SchemaError`, `Request` (CreateTable, Insert, Get with optional min seq), `Response` (`Written(seq)`, `Row { record: Option, seq }`, non_exhaustive), `DbError` (non_exhaustive; `db_error_status()` -> `DbErrorStatus` Rejected/Unavailable/OutcomeUnknown; wraps `SchemaError` as `InvalidSchema`); 13 tests passing (DbError bucket tests still to write)
   - `server`: signatures only (`main`, `listener::run`, `connection::handle`, `Engine`), bodies are `todo!()`; deps tokio, tracing, tracing-subscriber
   - Rust Book ch. 4–5 read; ch. 4 quizzed
 - **Next actions, in order:**
-  1. `Request::Get`: make the freshness field `Option<LogSequenceNumber>`; consider a `Key` enum (Integer, Text) instead of `Value` for keys
-  2. `Response` in `protocol/src/response.rs`: one write variant (`Written`, the seq) and one variant per read shape (`Row`: optional record + seq)
-  3. `DbError` in `protocol/src/error.rs`: grouped by what the caller should do (wrong request / temporarily unavailable / outcome unknown); `#[non_exhaustive]`
-  4. `Executor` trait in `protocol/src/executor.rs`: async (`impl Future<...> + Send`), `&self`, `Send + Sync`
-  5. `protocol/src/wire.rs`: Request/Response <-> bytes, length-prefixed frames, payload format to decide (JSON via serde vs binary)
-  6. fill in `server`: `Engine` implements `Executor`; `connection::handle` does read frame -> decode Request -> execute -> encode Response -> write
+  1. `Executor` trait in `protocol/src/executor.rs`: async (`impl Future<...> + Send`), `&self`, `Send + Sync`
+  2. `protocol/src/wire.rs`: Request/Response <-> bytes, length-prefixed frames, payload format to decide (JSON via serde vs binary)
+  3. fill in `server`: `Engine` implements `Executor`; `connection::handle` does read frame -> decode Request -> execute -> encode Response -> write
 - **Request path (who touches bytes):** client encodes a Request with `wire` and sends it. The server's **listener** only accepts connections and hands each one to a **connection handler**. The handler decodes bytes into a `Request` (via `wire`), calls `engine.execute`, encodes the `Response` (via `wire`), and writes it back. `wire` lives in `protocol` because client and server must encode identically.
-- **Reading before step 4–6:** Rust Book ch. 6.2 (`match`), ch. 10 (traits), ch. 16 (`Arc`), ch. 17 (async); the tokio tutorial (mini-redis)
+- **Reading before steps 1–3:** Rust Book ch. 6.2 (`match`), ch. 10 (traits), ch. 16 (`Arc`), ch. 17 (async); the tokio tutorial (mini-redis)
 - **Known gaps to revisit:** why the borrow rules prevent dangling pointers (Vec reallocation); moves don't deep-copy; `&str`/`&[u8]` for read-only parameters
 - **Open lint:** clippy suggests `Default` for `Record`
+- **Open design item:** `Request::Get` still takes `key: Value`; consider a `Key` enum (Integer, Text; derives Eq/Ord/Hash) since keys can't be Float/Null. Also decide how Insert extracts a `Key` from a `Record`
 
 Update this section whenever a checkpoint passes.
 
