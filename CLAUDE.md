@@ -10,7 +10,7 @@ The central research question is:
 
 > Can I increase write ingestion and reader count without making every reader repeat all of the storage-maintenance work, while preserving explicit correctness and durability guarantees?
 
-This is an ambitious learning and research project. Success means understanding the design, implementing it myself, and measuring its tradeoffs. Production readiness, feature completeness, or outperforming PostgreSQL are not initial requirements.
+The goal is a production-grade, high-performance database built from scratch, which I implement myself. Research findings such as RaaS are insights built into its design, not the end goal. Early milestones simplify behavior to get there; they are steps, not the product. Performance claims, and claims that an adopted technique helps, must be backed by matched on/off measurements under the conditions in ROADMAP.md "Production track".
 
 ## Motivation and learning goals
 
@@ -109,7 +109,7 @@ Primary architectural inspiration:
 - [Reducing Tail Latency in Storage-Disaggregated Database Systems](https://cs.purdue.edu/homes/csjgwang/pubs/SIGMOD26_RaaS.pdf), Xi Pang and Jianguo Wang, SIGMOD 2026.
 - [OpenAurora RaaS implementation](https://github.com/purduedb/OpenAurora/tree/RaaS).
 
-The paper studies separating log replay from storage into independently scheduled work. It improves an existing disaggregated architecture; it does not introduce disaggregation itself. Our initial key-value replay prototype is a learning model, not a faithful reproduction of PostgreSQL page redo.
+The paper studies separating log replay from storage into independently scheduled work. It improves an existing disaggregated architecture; it does not introduce disaggregation itself. frankdb adopts its insight (offloaded, independently scheduled replay) and verifies that it pays off in our engine. The initial key-value replay prototype is a stepping stone; the real engine uses page-based storage with page-level redo, as described in ROADMAP.md.
 
 Secondary storage-design reading:
 
@@ -158,8 +158,8 @@ Also defer automatic failover, consensus, multi-primary writes, cross-region ope
 Keep a clear distinction between:
 - A new Rust database with limited PostgreSQL compatibility.
 - Modifying PostgreSQL/OpenAurora itself.
-- A simplified experiment inspired by a paper.
-- A faithful reproduction of a paper's mechanism and evaluation.
+- An intermediate milestone that only resembles the paper's mechanism.
+- The production engine with the paper's insight built in and measured (the goal).
 
 ## Roadmap and progress
 

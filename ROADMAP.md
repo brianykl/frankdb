@@ -4,8 +4,10 @@ A storage-disaggregated key-value database in Rust, inspired by
 [Replay-as-a-Service (RaaS)](https://cs.purdue.edu/homes/csjgwang/pubs/SIGMOD26_RaaS.pdf)
 (Pang & Wang, SIGMOD 2026).
 
-**What this is:** a new Rust database and a simplified experiment inspired by the paper.
-**What this is not:** a modification of PostgreSQL/OpenAurora or a faithful reproduction of the paper's evaluation.
+**What this is:** a production-grade, high-performance database built from scratch in Rust. The RaaS findings are a design insight we build *into* it (offloaded, independently scheduled replay to keep tail latency low), not the end goal.
+**What this is not:** an experiment for its own sake, or a modification of PostgreSQL/OpenAurora. Milestones 1–7 are scaffolding toward the real engine.
+
+**How the paper is used:** we adopt its insight and verify that it pays off *in frankdb*: turning the technique on vs off under matched conditions should cut tail latency for the reasons §3 gives. That measurement is how we know the design choice was right, not the product itself.
 
 ## Current status
 
@@ -63,7 +65,54 @@ Each milestone ends with a checkpoint: a test or demo that must pass before movi
 | 9 | Parallel offloaded replay + scheduler | thread pools, work partitioning | §5.3 / §5.4 in miniature | Tail latency and CPU use vs number of replay workers |
 | 10 | Demo app: event-offer tracker | CLI or HTTP | end-to-end use | Live demo: write prices, read with a freshness floor, kill replay, watch catch-up |
 
+| 11 | **Frontier:** coherent cache inside the driver | `Arc`, concurrent maps, background tasks | client-side caching, invalidation streams, fill/invalidate races | Driver cache on vs off: hit rate, p99, and zero stale reads beyond the stated freshness contract under a randomized checker |
+
 **Later:** a page-based storage engine (B-tree vs LSM, chosen after studying both), scans and secondary indexes, YCSB-style workloads, and a small PostgreSQL wire-protocol subset.
+
+---
+
+## Production track (what a production-grade frankdb needs)
+
+The milestones above build the architecture. A production-grade engine that actually benefits from the RaaS insight also needs these. They are listed so they shape earlier decisions, not as work for now.
+
+| Requirement | Why it is necessary | Source |
+|---|---|---|
+| **Page-based storage + page-level redo records** | The paper's tail latency comes from per-*page* log chains replayed by GetPage@LSN (§2.3, §2.4, §3). A key-value map with whole-value puts has no chains to replay. Our patch records (Stage A+) are a per-key analogue; pages are the faithful version. | paper |
+| **Storage CPU contention** | §3 attributes tail latency partly to background replay competing with foreground reads for the storage node's CPU. That only shows up if storage is a separate, CPU-bounded machine (or a strictly pinned CPU budget). | paper |
+| **Separate machines** | Local processes share one laptop's CPU, disk, and memory, so they cannot show independent scaling or offload benefits. Plan for cloud VMs once the engine is ready for real load. | engineering |
+| **Realistic benchmarks** | To show frankdb is fast, not just fast on a toy: YCSB-style workloads, and a SysBench-like one to compare against the paper's setting (§7). Label approximations as approximations. | engineering |
+| **Matched baselines** | RaaS on vs off with the same hardware, durability, batching, and data size larger than memory. | CLAUDE.md |
+| **Replicated durable log** | "Production-grade" durability means surviving a machine loss, not just a process crash. One log instance is not highly available. | engineering |
+
+Suggested ordering choice (mine, not the paper's): finish Milestones 1–7 on the key-value engine, then switch storage to pages before Milestone 8, so the replay offloading in 8–9 is built on the structure a real engine uses.
+
+---
+
+## Driver-integrated cache (Milestone 11 design notes)
+
+**The idea (Brian, 2026-11-17):** put the cache *inside the client driver* and make its invalidation part of the database's own correctness contract, instead of a separate Redis that the application keeps in sync by hand.
+
+**Why it fits this project.** The central research question is scaling readers without every reader repeating storage work. A driver cache is the extreme case: the reader is the application process itself. And frankdb already has the two pieces a coherent cache needs:
+1. **An ordered change stream** (the log). Invalidations can be derived from it, so they arrive in the same order as writes.
+2. **Freshness floors** (`min_seq`). This gives the cache a precise rule for when a cached value is good enough.
+
+**The core mechanism to design (sketch, not a spec):** the driver tracks *how far through the change stream it has seen invalidations*, call it its horizon H. Any cached key with no invalidation through H is known to be current as of H. So a read with `min_seq ≤ H` can be answered from the cache with the same guarantee storage would give. A read with `min_seq > H` must wait for the stream or go to the server. Writes return a seq, so read-your-own-writes falls out: after writing at seq s, the driver must not serve that key from cache until H ≥ s (or it caches the value it just wrote).
+
+**Correctness questions to settle (add to the log when decided):**
+- **Fill vs invalidate race.** The driver reads key k from storage at seq 10. Before the value is inserted into the cache, an invalidation for k at seq 11 arrives. If the fill lands afterward, the cache holds a stale value forever. How do fills carry their seq so stale fills are rejected?
+- **Stream disconnects.** If the driver misses part of the stream, H is no longer trustworthy. Drop the whole cache, or resume from a seq the log still holds? (Ties to "when may old log data be removed?")
+- **Invalidate vs update.** Push only "k changed at seq s", or push the new value? Values cost bandwidth; invalidations cost a re-read.
+- **Fan-out cost.** N drivers × write rate invalidation messages. Every driver gets everything, or drivers subscribe to keys/prefixes they hold, with the server tracking who holds what?
+- **Who produces invalidations?** Drivers tail the log directly, or the server/replay worker emits them? This is a new service boundary.
+- **Patches.** With server-side patches (Stage A+), can the driver apply a patch to its cached record, making it a tiny replay worker?
+- **Memory budget and eviction** in the application process.
+
+**Prior art to read before designing (verified to exist; sections not yet checked):**
+- *Scaling Memcache at Facebook* (Nishtala et al., NSDI 2013): leases for the stale-fill race, and invalidations driven by tailing the database commit log.
+- Redis client-side caching docs (`CLIENT TRACKING`): server-tracked mode vs broadcast-by-prefix mode, i.e. the fan-out tradeoff above.
+- DynamoDB Accelerator (DAX): a write-through cache in front of the database, for contrast.
+
+**Prerequisites:** Milestones 5–7 (a real change stream, freshness reads, and a benchmark harness to measure hit rate and p99). **Checkpoint:** a randomized checker issues concurrent writes and cached reads and proves no read ever returns a value older than its freshness floor; then measure cache on vs off.
 
 ---
 

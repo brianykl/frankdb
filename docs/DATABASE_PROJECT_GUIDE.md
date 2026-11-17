@@ -329,7 +329,7 @@ This initial replay worker applies the change stream to current state. That is a
 
 A later experiment can separate background preparation of reusable page versions from foreground reconstruction. Only that later boundary directly explores the more specific replay-offloading idea.
 
-Do not call the first four-process prototype a reproduction of the paper.
+Do not call the first four-process prototype a reproduction of the paper. The goal is a production-grade engine with the paper's insight built in, on page-based storage (see ROADMAP.md "Production track").
 
 ### Deferred decisions
 
