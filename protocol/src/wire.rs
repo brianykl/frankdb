@@ -150,4 +150,121 @@ mod tests {
         encode_value(&Value::Null, &mut out);
         assert_eq!(out, vec![0xAA, 1]);
     }
+
+    fn decode_all(bytes: &[u8]) -> Result<Value, WireError> {
+        let mut input = bytes;
+        let value = decode_value(&mut input)?;
+        assert!(input.is_empty(), "decoder left {} bytes", input.len());
+        Ok(value)
+    }
+
+    fn round_trip(value: Value) {
+        assert_eq!(decode_all(&encode(&value)), Ok(value));
+    }
+
+    fn float_round_trip_bits(f: f64) {
+        match decode_all(&encode(&Value::Float(f))) {
+            Ok(Value::Float(decoded)) => assert_eq!(decoded.to_bits(), f.to_bits()),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn round_trips_null_and_booleans() {
+        round_trip(Value::Null);
+        round_trip(Value::Boolean(true));
+        round_trip(Value::Boolean(false));
+    }
+
+    #[test]
+    fn round_trips_integers() {
+        round_trip(Value::Integer(0));
+        round_trip(Value::Integer(-1));
+        round_trip(Value::Integer(i64::MIN));
+        round_trip(Value::Integer(i64::MAX));
+    }
+
+    #[test]
+    fn round_trips_text() {
+        round_trip(Value::Text(String::new()));
+        round_trip(Value::Text("hi".to_string()));
+        round_trip(Value::Text("é".to_string()));
+    }
+
+    #[test]
+    fn round_trips_floats_bit_exact() {
+        // Compare bits: -0.0 == 0.0 and NaN != NaN under PartialEq.
+        float_round_trip_bits(1.5);
+        float_round_trip_bits(-0.0);
+        float_round_trip_bits(f64::NAN);
+        float_round_trip_bits(f64::INFINITY);
+    }
+
+    #[test]
+    fn empty_input_is_unexpected_end() {
+        assert_eq!(decode_all(&[]), Err(WireError::UnexpectedEnd));
+    }
+
+    #[test]
+    fn truncated_integer_is_unexpected_end() {
+        assert_eq!(decode_all(&[3, 1, 2, 3]), Err(WireError::UnexpectedEnd));
+    }
+
+    #[test]
+    fn truncated_text_length_is_unexpected_end() {
+        assert_eq!(decode_all(&[5, 2, 0]), Err(WireError::UnexpectedEnd));
+    }
+
+    #[test]
+    fn text_shorter_than_its_length_is_unexpected_end() {
+        assert_eq!(
+            decode_all(&[5, 10, 0, 0, 0, b'h', b'i']),
+            Err(WireError::UnexpectedEnd)
+        );
+    }
+
+    #[test]
+    fn huge_text_length_fails_without_allocating() {
+        assert_eq!(
+            decode_all(&[5, 0xFF, 0xFF, 0xFF, 0xFF]),
+            Err(WireError::UnexpectedEnd)
+        );
+    }
+
+    #[test]
+    fn missing_boolean_byte_is_unexpected_end() {
+        assert_eq!(decode_all(&[2]), Err(WireError::UnexpectedEnd));
+    }
+
+    #[test]
+    fn reserved_tag_zero_is_rejected() {
+        assert_eq!(decode_all(&[0]), Err(WireError::UnknownTag(0)));
+    }
+
+    #[test]
+    fn unknown_tag_is_rejected() {
+        assert_eq!(decode_all(&[99]), Err(WireError::UnknownTag(99)));
+    }
+
+    #[test]
+    fn invalid_boolean_byte_is_rejected() {
+        assert_eq!(decode_all(&[2, 2]), Err(WireError::InvalidBoolean(2)));
+    }
+
+    #[test]
+    fn invalid_utf8_is_rejected() {
+        assert_eq!(decode_all(&[5, 1, 0, 0, 0, 0xFF]), Err(WireError::InvalidUtf8));
+    }
+
+    #[test]
+    fn decodes_consecutive_values_and_advances_input() {
+        let mut buf = encode(&Value::Integer(7));
+        encode_value(&Value::Text("x".to_string()), &mut buf);
+        buf.push(0xAB);
+
+        let mut input = buf.as_slice();
+        assert_eq!(decode_value(&mut input), Ok(Value::Integer(7)));
+        assert_eq!(decode_value(&mut input), Ok(Value::Text("x".to_string())));
+        assert_eq!(input, &[0xAB]);
+    }
 }
