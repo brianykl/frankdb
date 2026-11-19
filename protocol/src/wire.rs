@@ -41,11 +41,45 @@ pub fn encode_value(value: &Value, out: &mut Vec<u8>) {
 }
 
 pub fn decode_value(input: &mut &[u8]) -> Result<Value, WireError> {
-    todo!()
+    let tag = take(input, 1)?[0];
+    match tag {
+        TAG_NULL => Ok(Value::Null),
+        TAG_BOOLEAN => match take(input, 1)?[0] {
+            0 => Ok(Value::Boolean(false)),
+            1 => Ok(Value::Boolean(true)),
+            other => Err(WireError::InvalidBoolean(other)),
+        },
+        TAG_INTEGER => {
+            let bytes = take(input, 8)?;
+            let array: [u8; 8] = bytes.try_into().expect("take returned 8 bytes");
+            Ok(Value::Integer(i64::from_le_bytes(array)))
+        }
+        TAG_FLOAT => {
+            let bytes = take(input, 8)?;
+            let array: [u8; 8] = bytes.try_into().expect("take returned 8 bytes");
+            Ok(Value::Float(f64::from_bits(u64::from_le_bytes(array))))
+        }
+        TAG_TEXT => {
+            let len_bytes = take(input, 4)?;
+            let len_array: [u8; 4] = len_bytes.try_into().expect("take returned 4 bytes");
+            let len = u32::from_le_bytes(len_array) as usize;
+            let text_bytes = take(input, len)?;
+            let text = std::str::from_utf8(text_bytes).map_err(|_| WireError::InvalidUtf8)?;
+            Ok(Value::Text(text.to_string()))
+        }
+        other => Err(WireError::UnknownTag(other)),
+    }
 }
 
 fn take<'a>(input: &mut &'a [u8], n: usize) -> Result<&'a [u8], WireError> {
-    todo!()
+    let bytes: &'a [u8] = *input;
+    if bytes.len() < n {
+        return Err(WireError::UnexpectedEnd);
+    }
+
+    let (head, rest) = bytes.split_at(n);
+    *input = rest;
+    Ok(head)
 }
 
 #[cfg(test)]
