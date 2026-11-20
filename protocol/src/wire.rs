@@ -1,5 +1,3 @@
-
-
 use crate::value::Value;
 
 #[derive(Debug, PartialEq)]
@@ -50,19 +48,13 @@ pub fn decode_value(input: &mut &[u8]) -> Result<Value, WireError> {
             other => Err(WireError::InvalidBoolean(other)),
         },
         TAG_INTEGER => {
-            let bytes = take(input, 8)?;
-            let array: [u8; 8] = bytes.try_into().expect("take returned 8 bytes");
-            Ok(Value::Integer(i64::from_le_bytes(array)))
+            Ok(Value::Integer(i64::from_le_bytes(take_array(input)?)))
         }
         TAG_FLOAT => {
-            let bytes = take(input, 8)?;
-            let array: [u8; 8] = bytes.try_into().expect("take returned 8 bytes");
-            Ok(Value::Float(f64::from_bits(u64::from_le_bytes(array))))
+            Ok(Value::Float(f64::from_bits(u64::from_le_bytes(take_array(input)?))))
         }
         TAG_TEXT => {
-            let len_bytes = take(input, 4)?;
-            let len_array: [u8; 4] = len_bytes.try_into().expect("take returned 4 bytes");
-            let len = u32::from_le_bytes(len_array) as usize;
+            let len = u32::from_le_bytes(take_array(input)?) as usize;
             let text_bytes = take(input, len)?;
             let text = std::str::from_utf8(text_bytes).map_err(|_| WireError::InvalidUtf8)?;
             Ok(Value::Text(text.to_string()))
@@ -80,6 +72,11 @@ fn take<'a>(input: &mut &'a [u8], n: usize) -> Result<&'a [u8], WireError> {
     let (head, rest) = bytes.split_at(n);
     *input = rest;
     Ok(head)
+}
+
+fn take_array<const N: usize>(input: &mut &[u8]) -> Result<[u8; N], WireError> {
+    let bytes = take(input, N)?;
+    Ok(bytes.try_into().expect("take checked the length"))
 }
 
 #[cfg(test)]
